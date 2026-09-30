@@ -1,23 +1,40 @@
 import os
 import time
+import threading
 import requests
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 CHECK_SECONDS = 30
 ALERT_RATIO = 0.70
-
 sent_alerts = {}
+
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"4H bot is running")
+
+    def log_message(self, format, *args):
+        return
+
+
+def run_health_server():
+    port = int(os.getenv("PORT", "10000"))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    print(f"Health server listening on port {port}", flush=True)
+    server.serve_forever()
 
 
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram bilgileri eksik.")
+        print("Telegram bilgileri eksik.", flush=True)
         return
-
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-
     try:
         response = requests.post(
             url,
@@ -26,28 +43,24 @@ def send_telegram(message):
         )
         response.raise_for_status()
     except Exception as exc:
-        print("Telegram hata:", exc)
+        print("Telegram hata:", exc, flush=True)
 
 
 def get_top_20():
     url = "https://api.gateio.ws/api/v4/futures/usdt/tickers"
     response = requests.get(url, timeout=15)
     response.raise_for_status()
-
     coins = []
-
     for item in response.json():
         try:
             contract = item["contract"]
             if not contract.endswith("_USDT"):
                 continue
-
             change = float(item.get("change_percentage", 0) or 0)
             volume = float(item.get("volume_24h_quote", 0) or 0)
             coins.append((contract, change, volume))
         except (ValueError, TypeError, KeyError):
             continue
-
     coins.sort(key=lambda x: x[1], reverse=True)
     return coins[:20]
 
@@ -55,31 +68,22 @@ def get_top_20():
 def get_previous_4h_candle(contract):
     url = "https://api.gateio.ws/api/v4/futures/usdt/candlesticks"
     params = {"contract": contract, "interval": "4h", "limit": 2}
-
     response = requests.get(url, params=params, timeout=15)
     response.raise_for_status()
     candles = response.json()
-
     if len(candles) < 2:
         return None
-
     previous = candles[-2]
     return float(previous["h"]), float(previous["l"])
 
 
 def get_price(contract):
     url = "https://api.gateio.ws/api/v4/futures/usdt/tickers"
-    response = requests.get(
-        url,
-        params={"contract": contract},
-        timeout=15,
-    )
+    response = requests.get(url, params={"contract": contract}, timeout=15)
     response.raise_for_status()
     data = response.json()
-
     if not data:
         return None
-
     return float(data[0]["last"])
 
 
@@ -131,22 +135,21 @@ def check_coin(contract):
 
 
 def main():
+    threading.Thread(target=run_health_server, daemon=True).start()
     send_telegram("4H Destek/Direnc botu calisti.")
 
     while True:
         try:
             top_coins = get_top_20()
-            print("Kontrol edilen coinler:", [coin[0] for coin in top_coins])
-
+            print("Kontrol edilen coinler:", [coin[0] for coin in top_coins], flush=True)
             for contract, _change, _volume in top_coins:
                 try:
                     check_coin(contract)
                 except Exception as exc:
-                    print(contract, "hata:", exc)
-
+                    print(contract, "hata:", exc, flush=True)
             time.sleep(CHECK_SECONDS)
         except Exception as exc:
-            print("Ana dongu hata:", exc)
+            print("Ana dongu hata:", exc, flush=True)
             time.sleep(30)
 
 
